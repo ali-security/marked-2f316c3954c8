@@ -1,37 +1,58 @@
 name: "Tests"
 on:
-  pull_request:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Optional jasmine spec filter; empty runs the full suite'
+        required: false
+        default: ''
 
 jobs:
   Test:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
-        node_version: ['lts/*', 'node']
+        # Upstream ran ['lts/*', 'node']; pinned to the majors those floating
+        # labels resolved to at the 2.0.6 release. Node 8 cannot run the locked
+        # jasmine 3.7.0, whose lib/loader.js uses dynamic import().
+        node_version: ['14', '16']
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v2
       - name: Install Node
-        uses: dcodeIO/setup-node-nvm@master
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node_version }}
+      - name: Pin registry to release date
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken=2021-05-27T16:17:12.429000Z
       - name: Install Dependencies
         run: npm ci
       - name: Run Unit Tests 👩🏽‍💻
+        if: inputs.test-filter == ''
         run: npm run test:unit
       - name: Run Spec Tests 👩🏽‍💻
+        if: inputs.test-filter == ''
         run: npm run test:specs
+      - name: Run Filtered Tests 👩🏽‍💻
+        if: inputs.test-filter != ''
+        run: npm test -- ${{ inputs.test-filter }}
 
   Lint:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v2
+      - name: Pin registry to release date
+        run: |
+          npm config set registry https://time-machines-npm.sealsecurity.io/
+          npm config set //time-machines-npm.sealsecurity.io/:_authToken=2021-05-27T16:17:12.429000Z
       - name: Install Dependencies
         run: npm ci
       - name: Lint ✨
@@ -39,9 +60,8 @@ jobs:
 
   Release:
     needs: [Test, Lint]
-    if: |
-      github.ref == 'refs/heads/master' &&
-      github.event.repository.fork == false
+    if: false
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -62,8 +82,31 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npx semantic-release
 
+  Pack:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v2
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '14'
+      - name: Pin npm to release version
+        run: npm i -g npm@7.12.0
+      # The committed lib/ and marked.min.js are the published build output; rebuilding them would rewrite the year in their generated banner.
+      - name: Pack 📦
+        run: npm pack
+      - name: Upload Tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: marked-2.0.6.tgz
+          if-no-files-found: error
+
   Skip:
     if: contains(github.event.head_commit.message, '[skip ci]')
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Skip CI 🚫
